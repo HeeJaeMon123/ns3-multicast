@@ -77,7 +77,12 @@ MmWavePropagationLossModel::GetTypeId(void)
                           "",
                           BooleanValue(false),
                           MakeBooleanAccessor(&MmWavePropagationLossModel::m_fixedLossTst),
-                          MakeBooleanChecker());
+                          MakeBooleanChecker())
+            .AddAttribute ("Frequency",
+                          "Carrier frequency in Hz (Only 28e9 or 73e9 supported by this model).",
+                          DoubleValue (28e9),
+                          MakeDoubleAccessor (&MmWavePropagationLossModel::m_frequency),
+                          MakeDoubleChecker<double> ());
     return tid;
 }
 

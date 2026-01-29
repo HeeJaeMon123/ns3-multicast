@@ -195,14 +195,41 @@ const unsigned MmWaveFlexTtiMacScheduler::m_rlcHdrSize = 3;
 const double MmWaveFlexTtiMacScheduler::m_berDl = 0.001;
 
 MmWaveFlexTtiMacScheduler::MmWaveFlexTtiMacScheduler()
-    : m_nextRnti(0),
-      m_tbUid(0),
-      m_macSchedSapUser(0),
-      m_macCschedSapUser(0)
+    : m_currentSectorIdx (0),   // 1. 헤더 129번 줄 (가장 빠름)
+      m_totalSectors (6),       // 2. 헤더 130번 줄
+      m_multicastMcs (15),      // 3. 헤더 131번 줄
+      m_nextRnti (0),           // 4. 헤더 276번 줄 (경고의 원인! 뒤로 보냄)
+      m_tbUid (0),              // 5. 헤더 280번 줄
+      m_macSchedSapUser (0),    
+      m_macCschedSapUser (0)
 {
     NS_LOG_FUNCTION(this);
-    m_macSchedSapProvider = new MmWaveFlexTtiMacSchedSapProvider(this);
-    m_macCschedSapProvider = new MmWaveFlexTtiMacCschedSapProvider(this);
+    // 섹터 0~5번에 각각 G-RNTI 1001, 1002... 부여
+    for (uint32_t i = 0; i < m_totalSectors; ++i) {
+        m_sectorToGroupMap[i] = 1000 + (i + 1);
+    }
+    
+    // 예시: 섹터 0의 집계 ACK는 RNTI 10번이 보낸다고 가정
+    // 실제 시뮬레이션 환경에 맞춰 UE의 RNTI를 매핑해야 함
+    // m_aggregatorToSectorMap[10] = 0; 
+    
+    m_macSchedSapProvider = new MmWaveFlexTtiMacSchedSapProvider (this);
+    m_macCschedSapProvider = new MmWaveFlexTtiMacCschedSapProvider (this);
+}
+
+
+void
+MmWaveFlexTtiMacScheduler::UpdateSteeringInfo ()
+{
+    // 순차적으로 섹터 인덱스 변경 (Steering)
+    m_currentSectorIdx = (m_currentSectorIdx + 1) % m_totalSectors;
+    uint16_t currentGroupRnti = m_sectorToGroupMap[m_currentSectorIdx];
+
+    // PHY 레이어에 현재 스티어링 정보를 전달 (Step 2에서 사용)
+    // m_phy는 Scheduler와 연결된 PHY 객체 (포인터 연결 필요)
+    if (m_phy) {
+        m_phy->SetCurrentSteeringInfo (currentGroupRnti, m_currentSectorIdx);
+    }
 }
 
 MmWaveFlexTtiMacScheduler::~MmWaveFlexTtiMacScheduler()
@@ -315,12 +342,26 @@ MmWaveFlexTtiMacScheduler::GetMacCschedSapProvider()
 void
 MmWaveFlexTtiMacScheduler::ConfigureCommonParameters(Ptr<MmWavePhyMacCommon> config)
 {
+    // m_phyMacConfig = config;
+    // m_amc = CreateObject<MmWaveAmc>(m_phyMacConfig);
+    // m_numHarqProcess = m_phyMacConfig->GetNumHarqProcess();
+    // m_harqTimeout = m_phyMacConfig->GetHarqTimeout();
+    // m_numDataSymbols = m_phyMacConfig->GetSymbPerSlot() - m_phyMacConfig->GetDlCtrlSymbols() -
+    //                    m_phyMacConfig->GetUlCtrlSymbols();
+
+
+    if (config) {
     m_phyMacConfig = config;
     m_amc = CreateObject<MmWaveAmc>(m_phyMacConfig);
     m_numHarqProcess = m_phyMacConfig->GetNumHarqProcess();
     m_harqTimeout = m_phyMacConfig->GetHarqTimeout();
     m_numDataSymbols = m_phyMacConfig->GetSymbPerSlot() - m_phyMacConfig->GetDlCtrlSymbols() -
                        m_phyMacConfig->GetUlCtrlSymbols();
+    } 
+    else 
+    {
+        NS_LOG_WARN ("Config가 NULL입니다. 나중에 다시 시도해야 합니다.");
+    }
 }
 
 void
@@ -725,9 +766,18 @@ MmWaveFlexTtiMacScheduler::DoSchedTriggerReq(
     int resvCtrl = m_phyMacConfig->GetDlCtrlSymbols() + m_phyMacConfig->GetUlCtrlSymbols();
     int symAvail = m_phyMacConfig->GetSymbPerSlot() - resvCtrl;
     uint8_t ttiIdx = 1;
-    uint8_t symIdx =
-        m_phyMacConfig->GetDlCtrlSymbols(); // symbols reserved for control at beginning of subframe
+    uint8_t symIdx = m_phyMacConfig->GetDlCtrlSymbols(); // symbols reserved for control at beginning of subframe
+    UpdateSteeringInfo();
+    
+    // // [삽입 위치 1: 빔 스티어링 결정]
+    // // 매 TTI마다 섹터를 변경하여 빔을 회전시킴
+    // m_currentSectorIdx = (m_currentSectorIdx + 1) % m_totalSectors;
+    // uint16_t currentGroupRnti = m_sectorToGroupMap[m_currentSectorIdx];
+    
+    // // PHY 레이어에 현재 빔 방향과 그룹 ID를 동기화 (우리가 수정한 PHY에서 사용)
+    // m_phy->SetCurrentSteeringInfo(currentGroupRnti, m_currentSectorIdx);
 
+    
     // process received CQIs
     RefreshDlCqiMaps();
     RefreshUlCqiMaps();
@@ -1059,7 +1109,40 @@ MmWaveFlexTtiMacScheduler::DoSchedTriggerReq(
 
     // ********************* END OF HARQ SECTION, START OF NEW DATA SCHEDULING *********************
     // //
+    // ---------------- [연구용 코드 삽입 시작] ----------------
+    // 멀티캐스트 자원 할당 로직: 기존 유니캐스트 루프를 대체하거나 우선 실행
+    if (symAvail > 0 && !m_ulOnly) 
+    {
+        uint16_t targetGroupRnti = m_sectorToGroupMap[m_currentSectorIdx];
+        
+        DciInfoElementTdma dci;
+        dci.m_rnti = targetGroupRnti;      // 그룹 ID 할당
+        dci.m_format = 0;
+        dci.m_symStart = symIdx;
+        dci.m_numSym = symAvail;          // 이 섹터 그룹이 남은 자원 독점
+        dci.m_ndi = 1;
+        dci.m_mcs = m_multicastMcs;       // 고정 MCS (예: 15)
+        dci.m_tbSize = m_amc->CalculateTbSize(dci.m_mcs, dci.m_numSym);
+        dci.m_harqProcess = 0; 
 
+        // TtiAllocInfo 생성 및 리스트 추가
+        TtiAllocInfo ttiInfo(ttiIdx++, TtiAllocInfo::DL_slotAllocInfo, TtiAllocInfo::CTRL_DATA, dci.m_rnti);
+        ttiInfo.m_dci = dci;
+
+        // PHY가 실제 데이터를 쏠 수 있도록 가상 RLC PDU 정보 추가
+        RlcPduInfo multicastPdu;
+        multicastPdu.m_lcid = 3; 
+        multicastPdu.m_size = dci.m_tbSize;
+        ttiInfo.m_rlcPduInfo.push_back(multicastPdu);
+
+        ret.m_slotAllocInfo.m_ttiAllocInfo.push_back(ttiInfo);
+        ret.m_slotAllocInfo.m_numSymAlloc += dci.m_numSym;
+
+        symIdx += symAvail;
+        symAvail = 0; // 중요: 자원을 0으로 만들어 아래 기존 유니캐스트 루프가 안 돌게 함
+    }
+    // ---------------- [연구용 코드 삽입 종료] ----------------
+    
     // get info on active DL flows
     if (symAvail > 0 && !m_ulOnly) // remaining symbols in current subframe after HARQ retx sched
     {

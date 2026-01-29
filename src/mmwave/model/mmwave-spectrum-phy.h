@@ -108,6 +108,7 @@ struct ExpectedTb
     bool m_isDownlink{0};        //!< is Downlink?
     uint8_t m_symStart{0};       //!< Sym start
     uint8_t m_numSym{0};         //!< Num sym
+    uint16_t m_myMulticastGroupId; // 이 단말이 속한 멀티캐스트 그룹 번호
 };
 
 struct TransportBlockInfo
@@ -153,7 +154,7 @@ class MmWaveSpectrumPhy : public SpectrumPhy
   public:
     MmWaveSpectrumPhy();
     virtual ~MmWaveSpectrumPhy();
-
+    void SetCurrentSteeringInfo (uint16_t groupRnti, uint32_t sectorIdx);
     enum State
     {
         IDLE = 0,
@@ -284,7 +285,11 @@ class MmWaveSpectrumPhy : public SpectrumPhy
     void EndTx();
     void EndRxData();
     void EndRxCtrl();
-
+    // --- 연구용 멀티캐스트 및 빔 스티어링 변수 추가 ---
+    uint16_t m_currentGroupRnti;   // 현재 하향링크 타겟 그룹 ID
+    uint32_t m_currentSectorIdx;    // 현재 안테나가 조준 중인 섹터 번호
+    uint16_t m_myMulticastGroupId; // 단말인 경우 본인이 가입한 그룹 ID
+    Ptr<AntennaModel> m_antennaModel; // 안테나 모델 객체
     /**
      * \brief Computes the minimum of the stored values
      * \param specVal the SpectrumValue

@@ -396,9 +396,29 @@ MmWaveSpectrumPhy::StartRx(Ptr<SpectrumSignalParameters> params)
             m_interferenceData->AddSignal(mmwaveDataRxParams->psd, mmwaveDataRxParams->duration);
 
             // check if the signal comes from a device connected to this cell
+            // check if the signal comes from a device connected to this cell
             if (mmwaveDataRxParams->cellId == m_cellId)
             {
-                StartRxData(mmwaveDataRxParams);
+                if (mmwaveDataRxParams->m_isMulticast) 
+                {
+                    // 수신된 신호의 그룹 ID와 나의 그룹 ID를 비교
+                    // m_myMulticastGroupId는 PHY 클래스에 미리 정의되어 있어야 함
+                    if (mmwaveDataRxParams->m_groupRnti == m_myMulticastGroupId)
+                    {
+                        NS_LOG_INFO ("내 그룹용 멀티캐스트 패킷 수신 시도 (Group ID: " << mmwaveDataRxParams->m_groupRnti << ")");
+                        StartRxData(mmwaveDataRxParams);
+                    }
+                    else
+                    {
+                        NS_LOG_INFO ("타 섹터/그룹용 멀티캐스트 신호 - 수신 거부 및 간섭으로 처리");
+                        // StartRxData를 호출하지 않음으로써 패킷 복조를 시도하지 않음
+                    }
+                }
+                else
+                {
+                    // 일반 유니캐스트 데이터는 기존대로 수신 시도
+                    StartRxData(mmwaveDataRxParams);
+                }
             }
             else
             {
@@ -884,11 +904,33 @@ MmWaveSpectrumPhy::StartTxDataFrames(Ptr<PacketBurst> pb,
         txParams->duration = duration;
         txParams->txPhy = this->GetObject<SpectrumPhy>();
         txParams->psd = m_txPsd;
-        txParams->packetBurst = pb;
+
+
+        // txParams->packetBurst = pb;
+        // txParams->cellId = m_cellId;
+        // txParams->ctrlMsgList = ctrlMsgList;
+        // txParams->slotInd = slotInd;
+        // txParams->txAntenna = nullptr; // TODO: do we need to know the antenna?
+
         txParams->cellId = m_cellId;
+        txParams->packetBurst = pb;
         txParams->ctrlMsgList = ctrlMsgList;
         txParams->slotInd = slotInd;
-        txParams->txAntenna = nullptr; // TODO: do we need to know the antenna?
+
+        // --- 추가 로직: 멀티캐스트 정보 및 빔 스티어링 적용 ---
+        // m_currentGroupRnti와 m_currentSectorIdx는 스케줄러가 알려준 값이라고 가정
+        txParams->m_isMulticast = true;
+        txParams->m_groupRnti = m_currentGroupRnti; 
+
+        // 현재 섹터 인덱스에 맞는 빔포밍 벡터 적용 (Steering)
+        // m_antennaModel은 각 섹터에 최적화된 가중치를 가짐
+        txParams->txAntenna = m_antennaModel; 
+
+        NS_LOG_INFO("전송 시작: 그룹=" << m_currentGroupRnti << " 섹터=" << (uint32_t)m_currentSectorIdx);
+
+        // m_channel->StartTx(txParams);
+
+
         NS_LOG_DEBUG(Simulator::Now().GetSeconds()
                      << " StartTxDataFrames " << txParams << " cellId " << m_cellId << " duration "
                      << (Simulator::Now() + duration).GetSeconds() << " slotInd "
@@ -1006,6 +1048,17 @@ MmWaveSpectrumPhy::Min(const SpectrumValue& specVal)
 {
     auto minIt{std::min_element(specVal.ConstValuesBegin(), specVal.ConstValuesEnd())};
     return *minIt;
+}
+
+
+void 
+MmWaveSpectrumPhy::SetCurrentSteeringInfo (uint16_t groupRnti, uint32_t sectorIdx)
+{
+    NS_LOG_FUNCTION (this << groupRnti << sectorIdx);
+    m_currentGroupRnti = groupRnti;
+    m_currentSectorIdx = sectorIdx;
+    
+    // 여기서 실제 안테나 모델의 Boresight(조준각)를 업데이트하는 로직을 추가할 수 있습니다.
 }
 
 TypeId

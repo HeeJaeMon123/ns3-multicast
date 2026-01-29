@@ -69,7 +69,7 @@ class MmWaveEnbMac : public Object
     MmWaveEnbMac(void);
     virtual ~MmWaveEnbMac(void);
     virtual void DoDispose(void) override;
-
+    Ptr<MmWaveMacScheduler> GetScheduler () const { return m_scheduler; }
     struct TransmitPduParameters
     {
         Ptr<Packet> pdu; /**< the RLC PDU */
@@ -123,7 +123,7 @@ class MmWaveEnbMac : public Object
     void SetComponentCarrierId(uint8_t index);
     void SetConfigurationParameters(Ptr<MmWavePhyMacCommon> ptrConfig);
     Ptr<MmWavePhyMacCommon> GetConfigurationParameters(void) const;
-
+    Ptr<MmWaveMacScheduler> m_scheduler;
     void SetCellId(uint16_t cellId);
 
     // forwarded from LteMacSapProvider

@@ -942,11 +942,37 @@ MmWaveEnbMac::DoSchedConfigIndication(MmWaveMacSchedSapUser::SchedConfigIndParam
             // here log all the packets sent in downlink
             m_macDlTxSizeRetx(rnti, m_cellId, ttiAllocInfo.m_dci.m_tbSize, ttiAllocInfo.m_dci.m_rv);
 
-            std::map<uint16_t, std::map<uint8_t, LteMacSapUser*>>::iterator rntiIt =
-                m_rlcAttached.find(rnti);
+            // [수정] RLC에 등록된 RNTI인지 확인
+            std::map<uint16_t, std::map<uint8_t, LteMacSapUser*>>::iterator rntiIt = m_rlcAttached.find(rnti);
+
+            // std::map<uint16_t, std::map<uint8_t, LteMacSapUser*>>::iterator rntiIt = m_rlcAttached.find(rnti);
+
             if (rntiIt == m_rlcAttached.end())
             {
-                NS_FATAL_ERROR("Scheduled UE " << rntiIt->first << " not attached");
+                // 데이터 크기가 있고 RNTI가 0이 아니라면 멀티캐스트 패킷 생성
+                if (rnti > 0 && ttiAllocInfo.m_dci.m_tbSize > 0)
+                {
+                    NS_LOG_INFO("Processing Dynamic Multicast RNTI: " << rnti);
+                    
+                    Ptr<Packet> multicastPkt = Create<Packet> (ttiAllocInfo.m_dci.m_tbSize);
+                    
+                    // 1. 수신처 정보 태그 (LCID 3: Multicast 전용)
+                    LteRadioBearerTag bearerTag (rnti, 3, 0);
+                    multicastPkt->AddPacketTag (bearerTag);
+
+                    // [중요: 추가] 2. 전송 타이밍 정보 태그 (MmWaveMacPduTag)
+                    // 스케줄러가 배정한 SFN, SF, Slot, Symbol 정보를 패킷에 박아줍니다.
+                    SfnSf pduSfn = ind.m_sfnSf; // 현재 스케줄링 인디케이션의 시간 정보
+                    pduSfn.m_symStart = ttiAllocInfo.m_dci.m_symStart; // 해당 TTI의 시작 심볼
+                    
+                    MmWaveMacPduTag pduTag (pduSfn);
+                    pduTag.SetNumSym (ttiAllocInfo.m_dci.m_numSym); // 점유할 심볼 개수 설정
+                    multicastPkt->AddPacketTag (pduTag);
+
+                    // 이제 PHY 레이어(mmwave-phy.cc)의 검사(line 233)를 통과합니다.
+                    m_phySapProvider->SendMacPdu (multicastPkt);
+                }
+                continue;
             }
             else
             {

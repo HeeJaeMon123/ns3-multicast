@@ -52,10 +52,19 @@ else()
   endif()
 endif()
 
+# PaperCone antenna sources/headers (always built)
+set(paper_cone_antenna_sources
+    model/paper-cone-antenna-model.cc
+)
+set(paper_cone_antenna_headers
+    model/paper-cone-antenna-model.h
+)
+
 build_lib(
   LIBNAME antenna
   SOURCE_FILES
     ${circular_aperture_antenna_sources}
+    ${paper_cone_antenna_sources}
     model/angles.cc
     model/antenna-model.cc
     model/cosine-antenna-model.cc
@@ -66,6 +75,7 @@ build_lib(
     model/uniform-planar-array.cc
   HEADER_FILES
     ${circular_aperture_antenna_headers}
+    ${paper_cone_antenna_headers}
     model/angles.h
     model/antenna-model.h
     model/cosine-antenna-model.h

@@ -57,7 +57,7 @@ class MmWaveUeMac : public Object
 
   public:
     static TypeId GetTypeId(void);
-
+    
     MmWaveUeMac(void);
     ~MmWaveUeMac(void);
     virtual void DoDispose(void) override;
@@ -78,11 +78,16 @@ class MmWaveUeMac : public Object
 
     MmWaveUePhySapUser* GetPhySapUser();
     void SetPhySapProvider(MmWavePhySapProvider* ptr);
-
+    
     void RecvRaResponse(BuildRarListElement_s raResponse);
 
     void SetComponentCarrierId(uint8_t index);
-
+    // 수신 성공 시 호출될 함수
+    void SendLocalAckToAggregator (uint16_t groupRnti, bool isSuccess);
+    void SetMulticastGroup (uint16_t groupRnti) { m_myMulticastGroupId = groupRnti; }
+    // 대표 노드가 다른 단말의 ACK를 받았을 때 호출될 함수
+    void ReceiveLocalAck (uint16_t senderRnti, bool isSuccess);
+    Ptr<MmWaveUeMac> GetMacByRnti (uint16_t rnti) { return nullptr; }
     /**
      * Assign a fixed random variable stream number to the random variables
      * used by this model.  Return the number of streams (possibly zero) that
@@ -92,8 +97,16 @@ class MmWaveUeMac : public Object
      * \return the number of stream indices assigned by this model
      */
     int64_t AssignStreams(int64_t stream);
+    uint16_t GetRnti () const { return m_rnti; }
 
   private:
+    // --- 스텝 5: ACK 집계용 변수 ---
+    uint16_t m_aggregatorRnti;      // 우리 그룹의 대표 노드 번호
+    bool m_isAggregator;            // 내가 대표 노드인지 여부
+    uint16_t m_myMulticastGroupId;
+    // 대표 노드인 경우: 멤버 RNTI별 수신 성공 여부 저장 (Aggregation Graph용)
+    // std::map<UE_RNTI, Success_Status>
+    std::map<uint16_t, bool> m_ackAggregationTable;
     void DoTransmitPdu(LteMacSapProvider::TransmitPduParameters params);
     void DoReportBufferStatus(LteMacSapProvider::ReportBufferStatusParameters params);
 
@@ -120,6 +133,8 @@ class MmWaveUeMac : public Object
     void SendReportBufferStatus(void);
     void RefreshHarqProcessesPacketBuffer(void);
 
+    // 함수명을 더 일반적인 '이웃 노드에게 전송'으로 변경
+    void SendLocalAckToNeighbor (uint16_t targetRnti, bool isSuccess);
     std::map<uint32_t, struct MacPduInfo>::iterator AddToMacPduMap(DciInfoElementTdma dci,
                                                                    unsigned activeLcs);
 
@@ -140,7 +155,7 @@ class MmWaveUeMac : public Object
     uint32_t m_frameNum;
     uint8_t m_sfNum;
     uint8_t m_slotNum;
-
+    uint16_t m_currentMulticastGroupId;
     // uint8_t  m_tbUid;
     std::map<uint32_t, struct MacPduInfo> m_macPduMap;
 

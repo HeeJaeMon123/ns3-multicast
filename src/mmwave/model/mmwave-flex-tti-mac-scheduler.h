@@ -32,6 +32,7 @@
 #include "mmwave-mac-csched-sap.h"
 #include "mmwave-mac-sched-sap.h"
 #include "mmwave-mac-scheduler.h"
+#include "mmwave-spectrum-phy.h"
 #include "string"
 
 #include <set>
@@ -77,7 +78,7 @@ class MmWaveFlexTtiMacScheduler : public MmWaveMacScheduler
 
     void RefreshDlCqiMaps(void);
     void RefreshUlCqiMaps(void);
-
+    void SetPhy (Ptr<MmWaveSpectrumPhy> phy) { m_phy = phy; }
     void UpdateDlRlcBufferInfo(uint16_t rnti, uint8_t lcid, uint16_t size);
     void UpdateUlRlcBufferInfo(uint16_t rnti, uint16_t size);
 
@@ -123,6 +124,16 @@ class MmWaveFlexTtiMacScheduler : public MmWaveMacScheduler
         bool m_dlAllocDone;
         bool m_ulAllocDone;
     };
+
+    // --- 여기에 추가하세요 (UeSchedInfo 바깥, 클래스의 private 멤버) ---
+    uint32_t m_currentSectorIdx;           // 현재 빔이 향하는 섹터 번호
+    uint32_t m_totalSectors;               // 총 섹터 수
+    uint8_t  m_multicastMcs;               // 멀티캐스트용 고정 MCS
+    Ptr<MmWaveSpectrumPhy> m_phy; // <--- 이 줄을 추가해야 에러가 사라집니다.
+    std::map<uint32_t, uint16_t> m_sectorToGroupMap;   // 섹터별 G-RNTI 매핑
+    std::map<uint16_t, uint32_t> m_aggregatorToSectorMap; // Aggregator RNTI별 섹터 매핑
+
+    void UpdateSteeringInfo ();            // 빔 회전 제어 함수
 
     unsigned CalcMinTbSizeNumSym(unsigned mcs, unsigned bufSize, unsigned& tbSize);
 

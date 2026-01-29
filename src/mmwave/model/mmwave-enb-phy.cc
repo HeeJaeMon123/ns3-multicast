@@ -78,12 +78,17 @@ MmWaveEnbPhy::MmWaveEnbPhy()
     NS_FATAL_ERROR("This constructor should not be called");
 }
 
+// mmwave-enb-phy.cc 파일 수정
 MmWaveEnbPhy::MmWaveEnbPhy(Ptr<MmWaveSpectrumPhy> dlPhy, Ptr<MmWaveSpectrumPhy> ulPhy)
     : MmWavePhy(dlPhy, ulPhy),
       m_prevSlot(0),
       m_prevTtiDir(TtiAllocInfo::NA),
       m_currSymStart(0)
 {
+    // [중요] dlPhy를 객체 시스템에 결합합니다. 
+    // 그래야 scratch 파일에서 GetObject<MmWaveSpectrumPhy>()로 찾을 수 있습니다.
+    // AggregateObject (dlPhy); 
+
     m_enbCphySapProvider = new MemberLteEnbCphySapProvider<MmWaveEnbPhy>(this);
     m_roundFromLastUeSinrUpdate = 0;
     Simulator::ScheduleNow(&MmWaveEnbPhy::StartSlot, this);

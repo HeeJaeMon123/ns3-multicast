@@ -161,7 +161,8 @@ class MmWavePhy : public Object
 
   protected:
     Ptr<NetDevice> m_netDevice;
-
+    Ptr<MmWaveSpectrumPhy> m_dlPhy;
+    Ptr<MmWaveSpectrumPhy> m_ulPhy;
     Ptr<MmWaveSpectrumPhy> m_spectrumPhy;
     Ptr<MmWaveSpectrumPhy> m_downlinkSpectrumPhy;
     Ptr<MmWaveSpectrumPhy> m_uplinkSpectrumPhy;

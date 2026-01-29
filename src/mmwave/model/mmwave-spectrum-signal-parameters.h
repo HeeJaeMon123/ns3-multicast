@@ -80,12 +80,12 @@ struct MmwaveSpectrumSignalParametersDataFrame : public SpectrumSignalParameters
     MmwaveSpectrumSignalParametersDataFrame(const MmwaveSpectrumSignalParametersDataFrame& p);
 
     Ptr<PacketBurst> packetBurst;
-
     std::list<Ptr<MmWaveControlMessage>> ctrlMsgList;
-
     uint16_t cellId;
-
     uint8_t slotInd;
+    // --- 여기에 아래 2줄을 추가하세요 ---
+    uint16_t m_groupRnti; // 멀티캐스트 그룹 ID (예: 100, 200 등)
+    bool m_isMulticast;   // 이 신호가 멀티캐스트인지 여부
 };
 
 struct MmWaveSpectrumSignalParametersDlCtrlFrame : public SpectrumSignalParameters

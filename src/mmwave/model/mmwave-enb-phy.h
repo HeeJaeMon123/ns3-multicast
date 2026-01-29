@@ -171,7 +171,9 @@ class MmWaveEnbPhy : public MmWavePhy
     double MakeAvg(std::vector<double>);
 
     double MakeVar(std::vector<double>, double);
-
+    
+    Ptr<MmWaveSpectrumPhy> GetSpectrumPhy () const { return m_downlinkSpectrumPhy; }
+    
     std::vector<double> MakeFilter(std::vector<double>,
                                    std::vector<double>,
                                    std::pair<uint64_t, uint64_t>);
@@ -188,7 +190,7 @@ class MmWaveEnbPhy : public MmWavePhy
     void DoSetSrsConfigurationIndex(uint16_t rnti, uint16_t srcCi);
     void DoSetMasterInformationBlock(LteRrcSap::MasterInformationBlock mib);
     void DoSetSystemInformationBlockType1(LteRrcSap::SystemInformationBlockType1 sib1);
-
+    Ptr<MmWaveSpectrumPhy> m_spectrumPhy;
     void DoSetBandwidth(uint8_t Bandwidth);
     void DoSetEarfcn(uint16_t Earfcn);
 

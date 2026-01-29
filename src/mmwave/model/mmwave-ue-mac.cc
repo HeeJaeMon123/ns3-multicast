@@ -83,6 +83,36 @@ UeMemberMmWaveUeCmacSapProvider::UeMemberMmWaveUeCmacSapProvider(MmWaveUeMac* ma
 }
 
 void
+MmWaveUeMac::ReceiveLocalAck (uint16_t senderRnti, bool isSuccess)
+{
+//   if (!m_isAggregator) return;
+
+  // 테이블에 해당 유저의 상태 기록
+  m_ackAggregationTable[senderRnti] = isSuccess;
+
+  NS_LOG_INFO ("대표 노드 " << m_rnti << ": 유저 " << senderRnti << "의 상태 저장 완료 (" 
+               << (isSuccess ? "성공" : "실패") << ")");
+  
+  // 여기서 희재 님이 구상하신 'Aggregation 그래프' 로직을 연동할 수 있습니다.
+  // 예: 현재 링크 수 계산 등
+}
+
+void
+MmWaveUeMac::SendLocalAckToAggregator (uint16_t groupRnti, bool isSuccess)
+{
+  if (m_isAggregator) return; // 내가 대표면 보낼 필요 없음
+
+  NS_LOG_INFO ("UE " << m_rnti << "가 대표 " << m_aggregatorRnti << "에게 로컬 ACK 전송");
+
+  // 실제로는 Sidelink(PC5) 패킷을 생성해야 하지만, 
+  // 우선은 로직 구현을 위해 대표 노드의 MAC 객체를 직접 찾아 함수를 호출하는 방식으로 시뮬레이션합니다.
+  Ptr<MmWaveUeMac> aggMac = GetMacByRnti(m_aggregatorRnti); 
+  if (aggMac) {
+    aggMac->ReceiveLocalAck (m_rnti, isSuccess);
+  }
+}
+
+void
 UeMemberMmWaveUeCmacSapProvider::ConfigureRach(RachConfig rc)
 {
     m_mac->DoConfigureRach(rc);
@@ -243,14 +273,15 @@ MmWaveUeMac::GetTypeId(void)
 }
 
 MmWaveUeMac::MmWaveUeMac(void)
-    : m_componentCarrierId(0),
+    : m_aggregatorRnti (0),      // 1. 헤더 선언 순서상 가장 위쪽
+      m_isAggregator (false),     // 2.
+      m_componentCarrierId(0),
       m_bsrPeriodicity(MicroSeconds(100.0)),
-      // ideal behavior
       m_bsrLast(MilliSeconds(0)),
       m_freshUlBsr(false),
       m_raPreambleId(0),
-      m_rnti(0),
-      m_waitingForRaResponse(true)
+      m_rnti(0),                  // 3. m_waitingForRaResponse 보다 위쪽
+      m_waitingForRaResponse(true) // 4. 마지막 항목이므로 쉼표 제거!
 {
     NS_LOG_FUNCTION(this);
     m_cmacSapProvider = new UeMemberMmWaveUeCmacSapProvider(this);
@@ -529,6 +560,22 @@ MmWaveUeMac::DoSlotIndication(SfnSf sfn)
 }
 
 void
+MmWaveUeMac::SendLocalAckToNeighbor (uint16_t targetRnti, bool isSuccess)
+{
+  // 자기 자신에게는 보낼 필요 없음
+  if (targetRnti == m_rnti) return;
+
+  NS_LOG_INFO ("UE " << m_rnti << "가 노드 " << targetRnti << "에게 로컬 ACK 전송");
+
+  // targetRnti가 대표 노드이든 일반 노드이든 상관없이 해당 객체를 찾음
+  Ptr<MmWaveUeMac> targetMac = GetMacByRnti(targetRnti); 
+  if (targetMac) {
+    // 상대방의 ReceiveLocalAck를 호출
+    targetMac->ReceiveLocalAck (m_rnti, isSuccess);
+  }
+}
+
+void
 MmWaveUeMac::DoReceivePhyPdu(Ptr<Packet> p)
 {
     NS_LOG_FUNCTION(this);
@@ -536,11 +583,21 @@ MmWaveUeMac::DoReceivePhyPdu(Ptr<Packet> p)
     p->RemovePacketTag(tag);
     MmWaveMacPduHeader macHeader;
     p->RemoveHeader(macHeader);
+
     NS_LOG_INFO("ReceivePdu for rnti " << tag.GetRnti());
+
     if (tag.GetRnti() == m_rnti) // packet is for the current user
     {
+        bool isSuccess = true; 
+        // 2. 대표 노드에게 로컬 ACK 전송 (연구 로직 연결)
+        // m_currentMulticastGroupId가 정의되지 않았다면 헤더에 추가하거나 임시로 0을 넣으세요.
+        SendLocalAckToAggregator(0, isSuccess); 
+
+        // --- [기존 로직 시작] ---
         std::vector<MacSubheader> macSubheaders = macHeader.GetSubheaders();
-        // NS_LOG_UNCOND("MmWaveUeMac receive PHY pdu with " << macSubheaders.size() << " pdu");
+        // uint32_t currPos = 0;
+        // std::vector<MacSubheader> macSubheaders = macHeader.GetSubheaders();
+        NS_LOG_UNCOND("MmWaveUeMac receive PHY pdu with " << macSubheaders.size() << " pdu");
         uint32_t currPos = 0;
         for (unsigned ipdu = 0; ipdu < macSubheaders.size(); ipdu++)
         {

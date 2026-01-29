@@ -62,10 +62,32 @@ mmwaveSpectrumSignalParameters::Copy() const
     return Create<mmwaveSpectrumSignalParameters>(*this);
 }
 
-MmwaveSpectrumSignalParametersDataFrame::MmwaveSpectrumSignalParametersDataFrame()
+// MmwaveSpectrumSignalParametersDataFrame::MmwaveSpectrumSignalParametersDataFrame()
+// {
+//     NS_LOG_FUNCTION(this);
+// }
+
+MmwaveSpectrumSignalParametersDataFrame::MmwaveSpectrumSignalParametersDataFrame() : m_groupRnti (0),      // 초기값 0
+    m_isMulticast (false) // 기본은 유니캐스트
 {
     NS_LOG_FUNCTION(this);
 }
+
+// MmwaveSpectrumSignalParametersDataFrame::MmwaveSpectrumSignalParametersDataFrame(
+//     const MmwaveSpectrumSignalParametersDataFrame& p)
+//     : SpectrumSignalParameters(p)
+// {
+//     NS_LOG_FUNCTION(this << &p);
+//     cellId = p.cellId;
+//     if (p.packetBurst)
+//     {
+//         packetBurst = p.packetBurst->Copy();
+//     }
+//     ctrlMsgList = p.ctrlMsgList;
+//     slotInd = p.slotInd;
+// }
+
+
 
 MmwaveSpectrumSignalParametersDataFrame::MmwaveSpectrumSignalParametersDataFrame(
     const MmwaveSpectrumSignalParametersDataFrame& p)
@@ -79,6 +101,10 @@ MmwaveSpectrumSignalParametersDataFrame::MmwaveSpectrumSignalParametersDataFrame
     }
     ctrlMsgList = p.ctrlMsgList;
     slotInd = p.slotInd;
+
+    // --- 여기에 아래 2줄을 추가하여 데이터가 복사되게 하세요 ---
+    m_groupRnti = p.m_groupRnti;
+    m_isMulticast = p.m_isMulticast;
 }
 
 Ptr<SpectrumSignalParameters>
