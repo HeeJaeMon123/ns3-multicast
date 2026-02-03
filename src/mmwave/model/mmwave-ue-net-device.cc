@@ -119,6 +119,15 @@ MmWaveUeNetDevice::DoInitialize(void)
         Ptr<MmWaveComponentCarrierUe> ccUe = DynamicCast<MmWaveComponentCarrierUe>(it->second);
         ccUe->GetPhy()->Initialize();
         ccUe->GetMac()->Initialize();
+
+        // [핵심 추가] MAC에서 올라온 데이터를 이 NetDevice로 받도록 연결
+        Ptr<MmWaveUeMac> ueMac = ccUe->GetMac();
+        if (ueMac) 
+        {
+            // [중요] 반드시 ReceivePdu가 아닌 Receive 함수를 연결해야 할 수도 있습니다. 
+            // 일단 박사님 환경에서 가장 일반적인 Receive 콜백을 연결합니다.
+            ueMac->SetForwardUpCallback(MakeCallback(&MmWaveUeNetDevice::Receive, this));
+        }
     }
     m_rrc->Initialize();
 }

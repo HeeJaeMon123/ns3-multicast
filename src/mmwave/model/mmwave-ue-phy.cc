@@ -434,10 +434,14 @@ MmWaveUePhy::ReceiveControlMessageList(std::list<Ptr<MmWaveControlMessage>> msgL
                               << (unsigned)dciInfoElem.m_symStart << " numSym "
                               << (unsigned)dciInfoElem.m_numSym);
 
-            if (dciInfoElem.m_rnti != m_rnti)
+            if (dciInfoElem.m_rnti != m_rnti && dciInfoElem.m_rnti < 1000)
             {
-                continue; // DCI not for me
+                // 내 RNTI도 아니고, 멀티캐스트 RNTI(1000 이상)도 아니면 무시
+                continue; 
             }
+
+            // 위 필터를 통과하면 아래 로그가 찍히게 됩니다.
+            NS_LOG_DEBUG("UE " << m_rnti << " 가 DCI를 수락함. Target RNTI: " << dciInfoElem.m_rnti);
 
             if (dciInfoElem.m_format ==
                 DciInfoElementTdma::DL_dci) // set downlink slot schedule for current slot
@@ -584,6 +588,20 @@ MmWaveUePhy::StartTti()
         // point the beam towards the serving BS
         NS_LOG_LOGIC("UE " << m_rnti << " cid " << m_cellId << " BF");
         m_downlinkSpectrumPhy->ConfigureBeamforming(m_registeredEnb.find(m_cellId)->second.second);
+
+            // [2] 박사님 연구용 추가 로직: 1001번 멀티캐스트 패킷 강제 디코딩 예약
+        // DCI(예고장)가 오지 않아도 물리 계층이 이 패킷을 낚아채서 MAC으로 올리게 합니다.
+
+        // uint8_t waitSlot = (m_slotNum + 2) % m_phyMacConfig->GetSlotsPerSubframe();
+
+        m_downlinkSpectrumPhy->AddExpectedTb (
+            1001, 1, 
+            1228,  // <--- 기지국 MAC 로그의 "최종크기" 숫자와 반드시 일치시키세요!
+            15, m_channelChunks, 0, 0, true, 0, 
+            m_phyMacConfig->GetSymbPerSlot()
+        );
+        // NS_LOG_UNCOND("[T: " << Simulator::Now().GetSeconds() << "s] UE " << m_rnti << " PHY: 1001번 수신 예약 완료 (Expected: 1228B)");
+        
     }
 
     TtiAllocInfo currTti = m_currSlotAllocInfo.m_ttiAllocInfo[m_ttiIndex];
@@ -770,9 +788,29 @@ MmWaveUePhy::EndTti()
     }
 }
 
+#include "ns3/lte-radio-bearer-tag.h" // [필수] 상단 include 확인
+
 void
 MmWaveUePhy::PhyDataPacketReceived(Ptr<Packet> p)
 {
+    // [박사님 연구용 멀티캐스트 하이패스 - PHY 문 열기]
+    LteRadioBearerTag tag;
+    if (p->PeekPacketTag(tag))
+    {
+        if (tag.GetRnti() == 1001)
+        {
+            // DCI 체크를 완전히 무시하고 즉시 MAC의 지연 수신 함수로 넘깁니다.
+            // NS_LOG_UNCOND("[T: " << Simulator::Now().GetSeconds() << "s] UE PHY: 1001번 전파 탐지 -> MAC으로 강제 주입 (Size: " << p->GetSize() << ")");
+            
+            Simulator::Schedule(MicroSeconds(m_phyMacConfig->GetTbDecodeLatency()),
+                                &MmWaveUePhy::DelayPhyDataPacketReceived,
+                                this,
+                                p);
+            return; // 기존의 필터링 로직을 수행하지 않고 여기서 끝냅니다.
+        }
+    }
+
+    // --- 이하는 원래의 유니캐스트 로직 (유지) ---
     if (!m_phyReset)
     {
         Simulator::Schedule(MicroSeconds(m_phyMacConfig->GetTbDecodeLatency()),
@@ -780,11 +818,6 @@ MmWaveUePhy::PhyDataPacketReceived(Ptr<Packet> p)
                             this,
                             p);
     }
-    // Simulator::ScheduleWithContext (m_netDevice->GetNode()->GetId(),
-    //                               MicroSeconds(m_phyMacConfig->GetTbDecodeLatency()),
-    //                               &MmWaveUePhySapUser::ReceivePhyPdu,
-    //                               m_phySapUser,
-    //                               p);
 }
 
 void

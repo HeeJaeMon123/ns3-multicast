@@ -33,7 +33,9 @@
  */
 
 #include "mmwave-ue-mac.h"
-
+#include "ns3/mmwave-mac-pdu-header.h"
+#include "ns3/mmwave-mac-pdu-tag.h"
+#include "ns3/lte-radio-bearer-tag.h"
 #include "mmwave-phy-sap.h"
 
 #include <ns3/log.h>
@@ -575,101 +577,37 @@ MmWaveUeMac::SendLocalAckToNeighbor (uint16_t targetRnti, bool isSuccess)
   }
 }
 
+// [파일 하단에 추가]
 void
-MmWaveUeMac::DoReceivePhyPdu(Ptr<Packet> p)
+MmWaveUeMac::SetForwardUpCallback (Callback<void, Ptr<Packet>> cb)
 {
-    NS_LOG_FUNCTION(this);
-    LteRadioBearerTag tag;
-    p->RemovePacketTag(tag);
-    MmWaveMacPduHeader macHeader;
-    p->RemoveHeader(macHeader);
-
-    NS_LOG_INFO("ReceivePdu for rnti " << tag.GetRnti());
-
-    if (tag.GetRnti() == m_rnti) // packet is for the current user
-    {
-        bool isSuccess = true; 
-        // 2. 대표 노드에게 로컬 ACK 전송 (연구 로직 연결)
-        // m_currentMulticastGroupId가 정의되지 않았다면 헤더에 추가하거나 임시로 0을 넣으세요.
-        SendLocalAckToAggregator(0, isSuccess); 
-
-        // --- [기존 로직 시작] ---
-        std::vector<MacSubheader> macSubheaders = macHeader.GetSubheaders();
-        // uint32_t currPos = 0;
-        // std::vector<MacSubheader> macSubheaders = macHeader.GetSubheaders();
-        NS_LOG_UNCOND("MmWaveUeMac receive PHY pdu with " << macSubheaders.size() << " pdu");
-        uint32_t currPos = 0;
-        for (unsigned ipdu = 0; ipdu < macSubheaders.size(); ipdu++)
-        {
-            if (macSubheaders[ipdu].m_size == 0)
-            {
-                continue;
-            }
-            NS_LOG_INFO("It is for lcid " << (uint16_t)macSubheaders[ipdu].m_lcid);
-            std::map<uint8_t, LcInfo>::const_iterator it =
-                m_lcInfoMap.find(macSubheaders[ipdu].m_lcid);
-            // NS_ASSERT_MSG (it != m_lcInfoMap.end (), "received packet with unknown lcid " <<
-            // (uint16_t)macSubheaders[ipdu].m_lcid);
-            if (it == m_lcInfoMap.end())
-            {
-                NS_LOG_WARN("received packet with unknown lcid "
-                            << (uint16_t)macSubheaders[ipdu].m_lcid);
-            }
-
-            if (it != m_lcInfoMap.end())
-            {
-                Ptr<Packet> rlcPdu;
-                if ((p->GetSize() - currPos) < (uint32_t)macSubheaders[ipdu].m_size)
-                {
-                    NS_LOG_ERROR("Packet size less than specified in MAC header (actual= "
-                                 << p->GetSize()
-                                 << " header= " << (uint32_t)macSubheaders[ipdu].m_size << ")");
-                }
-                else if ((p->GetSize() - currPos) > (uint32_t)macSubheaders[ipdu].m_size)
-                {
-                    NS_LOG_DEBUG("Fragmenting MAC PDU (packet size greater than specified in MAC "
-                                 "header (actual= "
-                                 << p->GetSize()
-                                 << " header= " << (uint32_t)macSubheaders[ipdu].m_size << ")");
-                    rlcPdu = p->CreateFragment(currPos, (uint32_t)macSubheaders[ipdu].m_size);
-                    currPos += (uint32_t)macSubheaders[ipdu].m_size;
-
-                    LteMacSapUser::ReceivePduParameters rxPduParams;
-                    rxPduParams.p = rlcPdu;
-                    rxPduParams.rnti = m_rnti;
-                    rxPduParams.lcid = macSubheaders[ipdu].m_lcid;
-                    it->second.macSapUser->ReceivePdu(rxPduParams);
-                }
-                else
-                {
-                    rlcPdu = p->CreateFragment(currPos, p->GetSize() - currPos);
-                    currPos = p->GetSize();
-                    LteRlcSpecificLteMacSapUser* user =
-                        (LteRlcSpecificLteMacSapUser*)it->second.macSapUser;
-
-                    LteMacSapUser::ReceivePduParameters rxPduParams;
-                    rxPduParams.p = rlcPdu;
-                    rxPduParams.rnti = m_rnti;
-                    rxPduParams.lcid = macSubheaders[ipdu].m_lcid;
-                    user->ReceivePdu(rxPduParams);
-                }
-            }
-        }
-    }
+    m_forwardUpCallback = cb;
 }
 
-// void
-// MmWaveUeMac::DoNotifyHarqDeliveryFailure (uint8_t harqId)
-//{
-//   NS_LOG_FUNCTION (this);
-//   for (unsigned i = 0; i < m_miUlHarqProcessesPacket.at (harqId).m_lcidList.size (); i++)
-//   {
-//       uint8_t lcid = m_miUlHarqProcessesPacket.at (harqId).m_lcidList[i];
-//       std::map <uint8_t, LcInfo>::const_iterator it = m_lcInfoMap.find (lcid);
-//       NS_ASSERT_MSG (it != m_lcInfoMap.end (), "received packet with unknown lcid");
-//       it->second.macSapUser->NotifyHarqDeliveryFailure (harqId);
-//   }
-// }
+void 
+MmWaveUeMac::DoReceivePhyPdu (Ptr<Packet> p)
+{
+    LteRadioBearerTag peekTag;
+    if (!p->PeekPacketTag (peekTag)) return;
+
+    if (peekTag.GetRnti() == 1001)
+    {
+        // [핵심] 2바이트 패딩은 아예 무시합니다.
+        if (p->GetSize() <= 2) return; 
+
+        // 진짜 데이터가 왔을 때만 아래 로그가 찍힙니다.
+        NS_LOG_UNCOND ("!!! [SUCCESS] !!! UE " << m_rnti << " tossing REAL DATA! Size: " << p->GetSize());
+
+        Ptr<Packet> packetCopy = p->Copy();
+        packetCopy->RemoveAllPacketTags(); 
+
+        if (!m_forwardUpCallback.IsNull()) 
+        {
+            m_forwardUpCallback (packetCopy); 
+        }
+        return; 
+    }
+}
 
 void
 MmWaveUeMac::RecvRaResponse(BuildRarListElement_s raResponse)

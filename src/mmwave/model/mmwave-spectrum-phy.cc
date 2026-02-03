@@ -377,15 +377,15 @@ MmWaveSpectrumPhy::StartRx(Ptr<SpectrumSignalParameters> params)
         Ptr<MmWaveUeNetDevice> ueRx = DynamicCast<MmWaveUeNetDevice>(GetDevice());
         Ptr<McUeNetDevice> rxMcUe = DynamicCast<McUeNetDevice>(GetDevice());
 
-        if ((ueRx) && (ueRx->GetPhy(m_componentCarrierId)->IsReceptionEnabled() == false))
-        { // if the first cast is 0 (the device is MC) then this if will not be executed
-            isAllocated = false;
-        }
-        else if ((rxMcUe) &&
-                 (rxMcUe->GetMmWavePhy(m_componentCarrierId)->IsReceptionEnabled() == false))
-        { // this is executed if the device is MC and is transmitting
-            isAllocated = false;
-        }
+        // if ((ueRx) && (ueRx->GetPhy(m_componentCarrierId)->IsReceptionEnabled() == false))
+        // { // if the first cast is 0 (the device is MC) then this if will not be executed
+        //     isAllocated = false;
+        // }
+        // else if ((rxMcUe) &&
+        //          (rxMcUe->GetMmWavePhy(m_componentCarrierId)->IsReceptionEnabled() == false))
+        // { // this is executed if the device is MC and is transmitting
+        //     isAllocated = false;
+        // }
 
         NS_LOG_DEBUG("Now: " << Simulator::Now().GetSeconds() << " enb? " << (bool)(enbRx)
                              << " ue? " << (bool)(ueRx) << " " << isAllocated);
@@ -399,26 +399,11 @@ MmWaveSpectrumPhy::StartRx(Ptr<SpectrumSignalParameters> params)
             // check if the signal comes from a device connected to this cell
             if (mmwaveDataRxParams->cellId == m_cellId)
             {
-                if (mmwaveDataRxParams->m_isMulticast) 
-                {
-                    // 수신된 신호의 그룹 ID와 나의 그룹 ID를 비교
-                    // m_myMulticastGroupId는 PHY 클래스에 미리 정의되어 있어야 함
-                    if (mmwaveDataRxParams->m_groupRnti == m_myMulticastGroupId)
-                    {
-                        NS_LOG_INFO ("내 그룹용 멀티캐스트 패킷 수신 시도 (Group ID: " << mmwaveDataRxParams->m_groupRnti << ")");
-                        StartRxData(mmwaveDataRxParams);
-                    }
-                    else
-                    {
-                        NS_LOG_INFO ("타 섹터/그룹용 멀티캐스트 신호 - 수신 거부 및 간섭으로 처리");
-                        // StartRxData를 호출하지 않음으로써 패킷 복조를 시도하지 않음
-                    }
-                }
-                else
-                {
-                    // 일반 유니캐스트 데이터는 기존대로 수신 시도
-                    StartRxData(mmwaveDataRxParams);
-                }
+                
+                // [수정] 그룹 ID 비교 없이 무조건 수신 시도! 
+                // 실제 필터링은 이미 수정해둔 MAC(L2) 계층에서 수행하게 됩니다.
+                NS_LOG_INFO ("신호 감지: 패킷 복조 시도 (RNTI: " << mmwaveDataRxParams->m_groupRnti << ")");
+                StartRxData(mmwaveDataRxParams);
             }
             else
             {

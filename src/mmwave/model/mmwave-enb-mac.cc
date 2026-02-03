@@ -896,41 +896,66 @@ MmWaveEnbMac::DoReportBufferStatus(LteMacSapProvider::ReportBufferStatusParamete
 }
 
 // forwarded from LteMacSapProvider
-void
-MmWaveEnbMac::DoTransmitPdu(LteMacSapProvider::TransmitPduParameters params)
+void 
+MmWaveEnbMac::DoTransmitPdu (LteMacSapProvider::TransmitPduParameters params)
 {
-    // TB UID passed back along with RLC data as HARQ process ID
-    uint32_t tbMapKey = ((params.rnti & 0xFFFF) << 8) | (params.harqProcessId & 0xFF);
-    NS_LOG_LOGIC("Tx RLC PDU for rnti " << params.rnti << " lcid " << (uint32_t)params.lcid);
-    std::map<uint32_t, struct MacPduInfo>::iterator it = m_macPduMap.find(tbMapKey);
-    if (it == m_macPduMap.end())
+    NS_LOG_FUNCTION (this);
+
+    // ---------------- [연구용 멀티캐스트 직통 로직] ----------------
+    if (params.rnti >= 1000) 
     {
-        NS_FATAL_ERROR("No MAC PDU storage element found for this TB UID/RNTI");
+        Ptr<Packet> p = params.pdu->Copy(); 
+
+        // [전략 변경] 복잡한 미래 예약 대신, PHY가 현재 처리하려는 시점에 태그를 맞춥니다.
+        // 현재 MAC이 인지하는 시간(m_frameNum, m_sfNum, m_slotNum)을 그대로 사용합니다.
+        MmWaveMacPduTag pduTag;
+        pduTag.SetSfn (SfnSf (m_frameNum, m_sfNum, m_slotNum)); 
+        p->AddPacketTag (pduTag);
+
+        LteRadioBearerTag radioTag;
+        radioTag.SetRnti (params.rnti);
+        radioTag.SetLcid (params.lcid);
+        p->AddPacketTag (radioTag);
+
+        m_phySapProvider->SendMacPdu (p);
+        
+        NS_LOG_UNCOND ("DEBUG: eNB MAC 발사! [SFN:" << m_frameNum << " SF:" << (uint16_t)m_sfNum << " Slot:" << (uint16_t)m_slotNum << "] Size: " << p->GetSize());
+        return; 
     }
-    else
-    {
-        if (!it->second.m_pdu)
-        {
-            it->second.m_pdu = params.pdu;
-        }
-        else
-        {
-            it->second.m_pdu->AddAtEnd(params.pdu); // append to MAC PDU
-        }
-        MacSubheader subheader(params.lcid, params.pdu->GetSize());
-        it->second.m_macHeader.AddSubheader(subheader); // add RLC PDU sub-header into MAC header
-        it->second.m_numRlcPdu++;
-    }
+
+    // ---------------- [기존 ns-3 표준 유니캐스트 로직] ----------------
+    // // 원래 코드의 Map 기반 전송 로직입니다. (삭제하지 않음)
+    // uint32_t tbMapKey = ((params.rnti & 0xFFFF) << 8) | (params.harqProcessId & 0xFF);
+    // auto it = m_macPduMap.find(tbMapKey);
+
+    // if (it == m_macPduMap.end()) 
+    // {
+    //     NS_FATAL_ERROR("No MAC PDU storage element found for RNTI " << params.rnti);
+    // } 
+    // else 
+    // {
+    //     if (!it->second.m_pdu) 
+    //     { 
+    //         it->second.m_pdu = params.pdu; 
+    //     }
+    //     else 
+    //     { 
+    //         it->second.m_pdu->AddAtEnd(params.pdu); 
+    //     }
+        
+    //     MacSubheader subheader(params.lcid, params.pdu->GetSize());
+    //     it->second.m_macHeader.AddSubheader(subheader);
+    //     it->second.m_numRlcPdu++;
+    // }
 }
 
 void
 MmWaveEnbMac::DoSchedConfigIndication(MmWaveMacSchedSapUser::SchedConfigIndParameters ind)
 {
-    // Trace the scheduling decisions performed by the scheduler
     TraceSchedInfo(ind);
-
     m_phySapProvider->SetSlotAllocInfo(ind.m_slotAllocInfo);
     LteMacSapUser::TxOpportunityParameters txOpParams;
+    uint32_t subHdrSize = 4; 
 
     for (unsigned iTti = 0; iTti < ind.m_slotAllocInfo.m_ttiAllocInfo.size(); iTti++)
     {
@@ -939,166 +964,103 @@ MmWaveEnbMac::DoSchedConfigIndication(MmWaveMacSchedSapUser::SchedConfigIndParam
             ttiAllocInfo.m_tddMode == TtiAllocInfo::DL_slotAllocInfo)
         {
             uint16_t rnti = ttiAllocInfo.m_dci.m_rnti;
-            // here log all the packets sent in downlink
             m_macDlTxSizeRetx(rnti, m_cellId, ttiAllocInfo.m_dci.m_tbSize, ttiAllocInfo.m_dci.m_rv);
 
-            // [수정] RLC에 등록된 RNTI인지 확인
-            std::map<uint16_t, std::map<uint8_t, LteMacSapUser*>>::iterator rntiIt = m_rlcAttached.find(rnti);
-
-            // std::map<uint16_t, std::map<uint8_t, LteMacSapUser*>>::iterator rntiIt = m_rlcAttached.find(rnti);
-
-            if (rntiIt == m_rlcAttached.end())
+            // ---------------- [A] 멀티캐스트 처리 로직 (1000 이상) ----------------
+            if (rnti >= 1000)
             {
-                // 데이터 크기가 있고 RNTI가 0이 아니라면 멀티캐스트 패킷 생성
-                if (rnti > 0 && ttiAllocInfo.m_dci.m_tbSize > 0)
+                uint16_t sourceRnti = 1; // UE 0
+                auto rntiIt = m_rlcAttached.find(sourceRnti);
+
+                if (rntiIt != m_rlcAttached.end() && ttiAllocInfo.m_dci.m_tbSize > 0)
                 {
-                    NS_LOG_INFO("Processing Dynamic Multicast RNTI: " << rnti);
-                    
-                    Ptr<Packet> multicastPkt = Create<Packet> (ttiAllocInfo.m_dci.m_tbSize);
-                    
-                    // 1. 수신처 정보 태그 (LCID 3: Multicast 전용)
-                    LteRadioBearerTag bearerTag (rnti, 3, 0);
-                    multicastPkt->AddPacketTag (bearerTag);
+                    uint8_t multicastHarqId = 0; 
+                    uint32_t sourceKey = ((sourceRnti & 0xFFFF) << 8) | (multicastHarqId & 0xFF);
 
-                    // [중요: 추가] 2. 전송 타이밍 정보 태그 (MmWaveMacPduTag)
-                    // 스케줄러가 배정한 SFN, SF, Slot, Symbol 정보를 패킷에 박아줍니다.
-                    SfnSf pduSfn = ind.m_sfnSf; // 현재 스케줄링 인디케이션의 시간 정보
-                    pduSfn.m_symStart = ttiAllocInfo.m_dci.m_symStart; // 해당 TTI의 시작 심볼
-                    
-                    MmWaveMacPduTag pduTag (pduSfn);
-                    pduTag.SetNumSym (ttiAllocInfo.m_dci.m_numSym); // 점유할 심볼 개수 설정
-                    multicastPkt->AddPacketTag (pduTag);
+                    // 1. 그릇 생성 (인자 값을 명시적으로 전달)
+                    MacPduInfo sourcePduInfo(ind.m_sfnSf, ttiAllocInfo.m_dci.m_tbSize, rntiIt->second.size(), ttiAllocInfo.m_dci);
 
-                    // 이제 PHY 레이어(mmwave-phy.cc)의 검사(line 233)를 통과합니다.
-                    m_phySapProvider->SendMacPdu (multicastPkt);
+                    // [해결] operator[] 대신 insert를 사용하여 기본 생성자 에러 회피
+                    m_macPduMap.insert(std::make_pair(sourceKey, sourcePduInfo));
+
+                    // 2. RLC에 데이터 요청
+                    for (auto const& [lcid, msu] : rntiIt->second) {
+                        LteMacSapUser::TxOpportunityParameters txOp;
+                        txOp.bytes = ttiAllocInfo.m_dci.m_tbSize - 20; 
+                        txOp.rnti = sourceRnti;
+                        txOp.lcid = lcid;
+                        txOp.harqId = multicastHarqId; 
+                        txOp.componentCarrierId = m_componentCarrierId;
+                        msu->NotifyTxOpportunity(txOp);
+                    }
+
+                    // 3. 데이터 가로채기 및 전송
+                    auto itPdu = m_macPduMap.find(sourceKey);
+                    if (itPdu != m_macPduMap.end() && itPdu->second.m_pdu) {
+                        Ptr<Packet> realPkt = itPdu->second.m_pdu;
+
+                        // 태그 교체 (중복 방지)
+                        LteRadioBearerTag bearerTag(rnti, itPdu->second.m_size, 0);
+                        realPkt->RemovePacketTag(bearerTag);
+                        realPkt->AddPacketTag(bearerTag);
+                        
+                        MmWaveMacPduTag pduTag(ind.m_sfnSf);
+                        pduTag.SetNumSym(ttiAllocInfo.m_dci.m_numSym);
+                        realPkt->RemovePacketTag(pduTag);
+                        realPkt->AddPacketTag(pduTag);
+
+                        m_phySapProvider->SendMacPdu(realPkt);
+                        m_macPduMap.erase(itPdu); 
+                        NS_LOG_INFO("성공: 멀티캐스트 전송 완료");
+                    }
                 }
                 continue;
             }
-            else
+
+            // ---------------- [B] 일반 유니캐스트 처리 로직 ----------------
+            auto rntiIt = m_rlcAttached.find(rnti);
+            if (rntiIt != m_rlcAttached.end())
             {
-                // Call RLC entities to generate RLC PDUs
                 DciInfoElementTdma& dciElem = ttiAllocInfo.m_dci;
                 uint8_t tbUid = dciElem.m_harqProcess;
 
-                // update Harq Processes
-                if (dciElem.m_ndi == 1)
+                if (dciElem.m_ndi == 1) // 신규 데이터
                 {
-                    NS_ASSERT(dciElem.m_format == DciInfoElementTdma::DL_dci);
                     std::vector<RlcPduInfo>& rlcPduInfo = ttiAllocInfo.m_rlcPduInfo;
-                    NS_ASSERT(rlcPduInfo.size() > 0);
-                    SfnSf pduSfn = ind.m_sfnSf;
-                    pduSfn.m_symStart = ttiAllocInfo.m_dci.m_symStart;
-                    MacPduInfo macPduInfo(pduSfn,
-                                          ttiAllocInfo.m_dci.m_tbSize,
-                                          rlcPduInfo.size(),
-                                          dciElem);
-                    // insert into MAC PDU map
                     uint32_t tbMapKey = ((rnti & 0xFFFF) << 8) | (tbUid & 0xFF);
-                    std::pair<std::map<uint32_t, struct MacPduInfo>::iterator, bool> mapRet =
-                        m_macPduMap.insert(
-                            std::pair<uint32_t, struct MacPduInfo>(tbMapKey, macPduInfo));
-                    if (!mapRet.second)
-                    {
-                        NS_FATAL_ERROR("MAC PDU map element exists");
-                    }
+                    MacPduInfo macPduInfo(ind.m_sfnSf, ttiAllocInfo.m_dci.m_tbSize, rlcPduInfo.size(), dciElem);
+                    auto mapRet = m_macPduMap.insert(std::make_pair(tbMapKey, macPduInfo));
+                    
+                    auto harqIt = m_miDlHarqProcessesPackets.find(rnti);
+                    if (harqIt != m_miDlHarqProcessesPackets.end()) {
+                        harqIt->second.at(tbUid).m_pktBurst = CreateObject<PacketBurst>();
+                        harqIt->second.at(tbUid).m_lcidList.clear();
 
-                    // new data -> force emptying correspondent harq pkt buffer
-                    std::map<uint16_t, MmWaveDlHarqProcessesBuffer_t>::iterator harqIt =
-                        m_miDlHarqProcessesPackets.find(rnti);
-                    NS_ASSERT(harqIt != m_miDlHarqProcessesPackets.end());
-                    Ptr<PacketBurst> pb = CreateObject<PacketBurst>();
-                    harqIt->second.at(tbUid).m_pktBurst = pb;
-                    harqIt->second.at(tbUid).m_lcidList.clear();
-
-                    std::map<uint32_t, struct MacPduInfo>::iterator pduMapIt = mapRet.first;
-                    pduMapIt->second.m_numRlcPdu = 0;
-                    for (unsigned int ipdu = 0; ipdu < rlcPduInfo.size(); ipdu++)
-                    {
-                        NS_ASSERT_MSG(rntiIt != m_rlcAttached.end(), "could not find RNTI" << rnti);
-                        std::map<uint8_t, LteMacSapUser*>::iterator lcidIt =
-                            rntiIt->second.find(rlcPduInfo[ipdu].m_lcid);
-                        NS_ASSERT_MSG(lcidIt != rntiIt->second.end(),
-                                      "could not find LCID" << rlcPduInfo[ipdu].m_lcid);
-                        NS_LOG_DEBUG("Notifying RLC of TX opportunity for TB "
-                                     << (unsigned int)tbUid << " PDU num " << ipdu << " size "
-                                     << (unsigned int)rlcPduInfo[ipdu].m_size);
-                        MacSubheader subheader(rlcPduInfo[ipdu].m_lcid, rlcPduInfo[ipdu].m_size);
-
-                        txOpParams.bytes = (rlcPduInfo[ipdu].m_size) - subheader.GetSize();
-                        txOpParams.layer = 0;
-                        txOpParams.harqId = tbUid;
-                        txOpParams.componentCarrierId = m_componentCarrierId;
-                        txOpParams.rnti = rnti;
-                        txOpParams.lcid = rlcPduInfo[ipdu].m_lcid;
-                        (*lcidIt).second->NotifyTxOpportunity(txOpParams);
-                        harqIt->second.at(tbUid).m_lcidList.push_back(rlcPduInfo[ipdu].m_lcid);
-                    }
-
-                    if (pduMapIt->second.m_numRlcPdu == 0)
-                    {
-                        MacSubheader subheader(3, 0); // add subheader for empty packet
-                        pduMapIt->second.m_macHeader.AddSubheader(subheader);
-                    }
-                    pduMapIt->second.m_pdu->AddHeader(pduMapIt->second.m_macHeader);
-
-                    MmWaveMacPduHeader hdrTst;
-                    pduMapIt->second.m_pdu->PeekHeader(hdrTst);
-
-                    NS_ASSERT(pduMapIt->second.m_pdu->GetSize() > 0);
-                    LteRadioBearerTag bearerTag(rnti, pduMapIt->second.m_size, 0);
-                    pduMapIt->second.m_pdu->AddPacketTag(bearerTag);
-                    NS_LOG_DEBUG("eNB sending MAC pdu size " << pduMapIt->second.m_pdu->GetSize());
-                    for (unsigned i = 0; i < pduMapIt->second.m_macHeader.GetSubheaders().size();
-                         i++)
-                    {
-                        NS_LOG_DEBUG("Subheader "
-                                     << i << " size "
-                                     << pduMapIt->second.m_macHeader.GetSubheaders().at(i).m_size);
-                    }
-                    NS_LOG_DEBUG("Total MAC PDU size " << pduMapIt->second.m_pdu->GetSize());
-                    harqIt->second.at(tbUid).m_pktBurst->AddPacket(pduMapIt->second.m_pdu);
-
-                    m_txMacPacketTraceEnb(rnti,
-                                          m_componentCarrierId,
-                                          pduMapIt->second.m_pdu->GetSize());
-                    m_phySapProvider->SendMacPdu(pduMapIt->second.m_pdu);
-                    m_macPduMap.erase(pduMapIt); // delete map entry
-                }
-                else
-                {
-                    NS_LOG_INFO("DL retransmission");
-                    if (dciElem.m_tbSize > 0)
-                    {
-                        // HARQ retransmission -> retrieve TB from HARQ buffer
-                        std::map<uint16_t, MmWaveDlHarqProcessesBuffer_t>::iterator it =
-                            m_miDlHarqProcessesPackets.find(rnti);
-                        NS_ASSERT(it != m_miDlHarqProcessesPackets.end());
-                        Ptr<PacketBurst> pb = it->second.at(tbUid).m_pktBurst;
-                        for (std::list<Ptr<Packet>>::const_iterator j = pb->Begin(); j != pb->End();
-                             ++j)
-                        {
-                            Ptr<Packet> pkt = (*j)->Copy();
-                            MmWaveMacPduTag tag; // update PDU tag for retransmission
-                            if (!pkt->RemovePacketTag(tag))
-                            {
-                                NS_FATAL_ERROR("No MAC PDU tag");
+                        for (unsigned int ipdu = 0; ipdu < rlcPduInfo.size(); ipdu++) {
+                            auto lcidIt = rntiIt->second.find(rlcPduInfo[ipdu].m_lcid);
+                            if (lcidIt != rntiIt->second.end()) {
+                                txOpParams.bytes = rlcPduInfo[ipdu].m_size - subHdrSize;
+                                txOpParams.rnti = rnti;
+                                txOpParams.lcid = rlcPduInfo[ipdu].m_lcid;
+                                txOpParams.harqId = tbUid;
+                                (*lcidIt).second->NotifyTxOpportunity(txOpParams);
+                                harqIt->second.at(tbUid).m_lcidList.push_back(rlcPduInfo[ipdu].m_lcid);
                             }
-                            tag.SetSfn(SfnSf(ind.m_sfnSf.m_frameNum,
-                                             ind.m_sfnSf.m_sfNum,
-                                             ind.m_sfnSf.m_slotNum,
-                                             dciElem.m_symStart));
-                            tag.SetNumSym(dciElem.m_numSym);
-                            pkt->AddPacketTag(tag);
-
-                            m_txMacPacketTraceEnb(rnti, m_componentCarrierId, pkt->GetSize());
-                            m_phySapProvider->SendMacPdu(pkt);
                         }
+                        // PDU 조립 및 전송
+                        auto pduMapIt = mapRet.first;
+                        if (pduMapIt->second.m_numRlcPdu == 0) pduMapIt->second.m_macHeader.AddSubheader(MacSubheader(3, 0));
+                        pduMapIt->second.m_pdu->AddHeader(pduMapIt->second.m_macHeader);
+                        pduMapIt->second.m_pdu->AddPacketTag(LteRadioBearerTag(rnti, pduMapIt->second.m_size, 0));
+                        m_phySapProvider->SendMacPdu(pduMapIt->second.m_pdu);
                     }
+                    m_macPduMap.erase(tbMapKey);
                 }
             }
         }
     }
 }
+
 
 uint8_t
 MmWaveEnbMac::AllocateTbUid(void)

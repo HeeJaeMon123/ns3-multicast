@@ -33,6 +33,8 @@
 
 #include "mmwave-net-device.h"
 #include "mmwave-ue-net-device.h"
+#include "ns3/mmwave-mac-pdu-header.h" 
+#include "ns3/eps-bearer-tag.h"
 
 #include <ns3/abort.h>
 #include <ns3/callback.h>
@@ -208,16 +210,54 @@ MmWaveEnbNetDevice::GetRrc(void)
     return m_rrc;
 }
 
+
 bool
 MmWaveEnbNetDevice::DoSend(Ptr<Packet> packet, const Address& dest, uint16_t protocolNumber)
 {
     NS_LOG_FUNCTION(this << packet << dest << protocolNumber);
+
+    // [필수] IPv4(0x0800) 패킷일 때만 IP 헤더를 분석합니다.
+    if (protocolNumber == 0x0800) 
+    {
+        Ipv4Header ipHeader;
+        packet->PeekHeader(ipHeader); 
+
+        // 멀티캐스트 주소(224.0.1.1 등)인 경우 연구용 직통 경로 실행
+        if (ipHeader.GetDestination().IsMulticast())
+        {
+            NS_LOG_UNCOND("[T: " << Simulator::Now().GetSeconds() << "s] eNB NetDevice: 멀티캐스트 감지 -> MAC 직송");
+
+            Ptr<MmWaveEnbMac> enbMac = this->GetMac();
+            if (enbMac) 
+            {
+                // QoS 태그 부착 (RNTI 1001, BID 3)
+                EpsBearerTag bearerTag (1001, 3); 
+                packet->AddPacketTag (bearerTag);
+
+                // MAC 전송 파라미터 설정
+                LteMacSapProvider::TransmitPduParameters params;
+                params.pdu = packet; 
+                params.rnti = 1001;
+                params.lcid = 3;
+                params.harqProcessId = 0;
+                params.layer = 0; 
+                params.componentCarrierId = 0; 
+
+                // MAC으로 직접 던지고 함수 종료 (RRC 우회)
+                enbMac->DoTransmitPdu(params);
+                return true; 
+            }
+        }
+    }
+
+    // --- 원래 ns-3 표준 로직 (삭제 금지) ---
+    // 멀티캐스트가 아니거나 위 조건에 해당하지 않는 모든 패킷은 기존처럼 RRC가 처리합니다.
     NS_ABORT_MSG_IF(protocolNumber != Ipv4L3Protocol::PROT_NUMBER &&
-                        protocolNumber != Ipv6L3Protocol::PROT_NUMBER,
-                    "unsupported protocol " << protocolNumber << ", only IPv4/IPv6 is supported");
+                    protocolNumber != Ipv6L3Protocol::PROT_NUMBER,
+                    "unsupported protocol " << protocolNumber);
+    
     return m_rrc->SendData(packet);
 }
-
 void
 MmWaveEnbNetDevice::UpdateConfig(void)
 {

@@ -78,7 +78,7 @@ class MmWaveUeMac : public Object
 
     MmWaveUePhySapUser* GetPhySapUser();
     void SetPhySapProvider(MmWavePhySapProvider* ptr);
-    
+    void SetForwardUpCallback (Callback<void, Ptr<Packet>> cb);
     void RecvRaResponse(BuildRarListElement_s raResponse);
 
     void SetComponentCarrierId(uint8_t index);
@@ -132,7 +132,7 @@ class MmWaveUeMac : public Object
     void SendRaPreamble(bool contention);
     void SendReportBufferStatus(void);
     void RefreshHarqProcessesPacketBuffer(void);
-
+    Callback<void, Ptr<Packet>> m_forwardUpCallback;
     // 함수명을 더 일반적인 '이웃 노드에게 전송'으로 변경
     void SendLocalAckToNeighbor (uint16_t targetRnti, bool isSuccess);
     std::map<uint32_t, struct MacPduInfo>::iterator AddToMacPduMap(DciInfoElementTdma dci,
