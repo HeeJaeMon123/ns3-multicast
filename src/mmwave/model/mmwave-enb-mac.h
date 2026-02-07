@@ -34,7 +34,7 @@
 
 #ifndef SRC_MMWAVE_MODEL_MMWAVE_ENB_MAC_H_
 #define SRC_MMWAVE_MODEL_MMWAVE_ENB_MAC_H_
-
+#include <queue> // 최상단에 추가
 #include "mmwave-enb-mac.h"
 #include "mmwave-mac.h"
 #include "mmwave-phy-mac-common.h"
@@ -209,7 +209,7 @@ class MmWaveEnbMac : public Object
     LteEnbCmacSapProvider::RachConfig DoGetRachConfig();
     LteEnbCmacSapProvider::AllocateNcRaPreambleReturnValue DoAllocateNcRaPreamble(uint16_t rnti);
     uint8_t AllocateTbUid();
-
+    std::queue<Ptr<Packet>> m_multicastQueue;
     void DoDlHarqFeedback(DlHarqInfo params);
     void DoUlHarqFeedback(UlHarqInfo params);
 

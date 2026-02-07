@@ -36,6 +36,9 @@
 #include "ns3/mmwave-mac-pdu-header.h"
 #include "ns3/mmwave-mac-pdu-tag.h"
 #include "ns3/lte-radio-bearer-tag.h"
+#include "ns3/node.h"             // <--- 추가
+#include "ns3/ipv4-l3-protocol.h" // <--- 추가
+#include "ns3/loopback-net-device.h" // <--- 추가
 #include "mmwave-phy-sap.h"
 
 #include <ns3/log.h>
@@ -584,28 +587,69 @@ MmWaveUeMac::SetForwardUpCallback (Callback<void, Ptr<Packet>> cb)
     m_forwardUpCallback = cb;
 }
 
+// [파일 상단에 추가]
+#include "ns3/ipv4-l3-protocol.h"
+#include "ns3/node.h"
+
+// ...
+
 void 
 MmWaveUeMac::DoReceivePhyPdu (Ptr<Packet> p)
 {
+    // 1. 디버깅 로그
+    NS_LOG_UNCOND ("UE " << m_rnti << " MAC INCOMING: " << p->GetSize());
+
+    // 2. 헤더 제거
+    MmWaveMacPduHeader header;
+    p->RemoveHeader (header); 
+    uint32_t realDataSize = p->GetSize();
+    
+    if (realDataSize == 0) return; 
+
+    // 3. 태그 확인
     LteRadioBearerTag peekTag;
-    if (!p->PeekPacketTag (peekTag)) return;
+    uint16_t rxRnti = 0;
+    if (p->PeekPacketTag (peekTag)) {
+        rxRnti = peekTag.GetRnti();
+    }
 
-    if (peekTag.GetRnti() == 1001)
+    // 4. [수정] 콜백 없이 강제 전송 로직 (NetDevice 찾기 포함)
+    if (rxRnti >= 1000 || rxRnti == 65533 || rxRnti == 1001) 
     {
-        // [핵심] 2바이트 패딩은 아예 무시합니다.
-        if (p->GetSize() <= 2) return; 
-
-        // 진짜 데이터가 왔을 때만 아래 로그가 찍힙니다.
-        NS_LOG_UNCOND ("!!! [SUCCESS] !!! UE " << m_rnti << " tossing REAL DATA! Size: " << p->GetSize());
+        NS_LOG_UNCOND ("!!! [SUCCESS] !!! UE " << m_rnti << " REAL DATA: " << realDataSize);
 
         Ptr<Packet> packetCopy = p->Copy();
         packetCopy->RemoveAllPacketTags(); 
 
-        if (!m_forwardUpCallback.IsNull()) 
-        {
+        // [핵심 수정] Node를 찾고 -> NetDevice를 찾는다
+        Ptr<Object> object = this->GetObject<Object>();
+        Ptr<Node> node = object->GetObject<Node>(); 
+        
+        if (node) {
+            Ptr<Ipv4L3Protocol> ipv4 = node->GetObject<Ipv4L3Protocol>();
+            Ptr<NetDevice> myDevice = 0;
+
+            // 노드에 연결된 디바이스 중 Loopback이 아닌 첫 번째 장치를 찾음 (그게 mmWave 장치임)
+            for (uint32_t i = 0; i < node->GetNDevices(); ++i) {
+                Ptr<NetDevice> dev = node->GetDevice(i);
+                if (!DynamicCast<LoopbackNetDevice>(dev)) { 
+                    myDevice = dev; // 찾았다!
+                    break;
+                }
+            }
+
+            if (ipv4 && myDevice) {
+                // 찾은 myDevice를 인자로 넣어줌 (m_netDevice 에러 해결)
+                ipv4->Receive(myDevice, packetCopy, 0x0800, 
+                              Address(), Address(), NetDevice::PACKET_HOST);
+                return;
+            }
+        }
+        
+        // 위에서 실패했다면 기존 콜백 시도
+        if (!m_forwardUpCallback.IsNull()) {
             m_forwardUpCallback (packetCopy); 
         }
-        return; 
     }
 }
 

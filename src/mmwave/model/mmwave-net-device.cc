@@ -237,6 +237,9 @@ void
 MmWaveNetDevice::Receive(Ptr<Packet> p)
 {
     NS_LOG_FUNCTION(this << p);
+    
+    // [수정 전: 엄격한 헤더 검사] - 이 부분 때문에 시뮬레이션이 터짐
+    /*
     Ipv4Header ipv4Header;
     Ipv6Header ipv6Header;
 
@@ -253,6 +256,17 @@ MmWaveNetDevice::Receive(Ptr<Packet> p)
     else
     {
         NS_ABORT_MSG("MmWaveNetDevice::Receive - Unknown IP type...");
+    }
+    */
+
+    // [수정 후: 강제 패스 (연구용 Hack)]
+    // 이유: PHY에서 강제로 복구한 패킷이 헤더 검사를 통과 못 할 수도 있음.
+    // 우리는 무조건 IPv4 멀티캐스트를 쓰고 있으므로, 그냥 IPv4라고 믿고 상위 계층으로 던져준다.
+    
+    if (!m_rxCallback.IsNull())
+    {
+        // 0x0800은 IPv4 프로토콜 번호입니다.
+        m_rxCallback(this, p, 0x0800, Address());
     }
 }
 

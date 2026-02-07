@@ -33,7 +33,8 @@
  */
 
 #include "mmwave-enb-mac.h"
-
+#include <queue>
+#include <vector>
 #include "mmwave-mac-pdu-header.h"
 #include "mmwave-mac-sched-sap.h"
 #include "mmwave-mac-scheduler.h"
@@ -42,6 +43,9 @@
 #include <ns3/log.h>
 #include <ns3/lte-enb-cmac-sap.h>
 #include <ns3/lte-mac-sap.h>
+uint32_t g_activeIdx = 0;
+extern std::vector<uint32_t> g_activeSectors;
+
 
 namespace ns3
 {
@@ -900,28 +904,46 @@ void
 MmWaveEnbMac::DoTransmitPdu (LteMacSapProvider::TransmitPduParameters params)
 {
     NS_LOG_FUNCTION (this);
-
-    // ---------------- [연구용 멀티캐스트 직통 로직] ----------------
-    if (params.rnti >= 1000) 
-    {
-        Ptr<Packet> p = params.pdu->Copy(); 
-
-        // [전략 변경] 복잡한 미래 예약 대신, PHY가 현재 처리하려는 시점에 태그를 맞춥니다.
-        // 현재 MAC이 인지하는 시간(m_frameNum, m_sfNum, m_slotNum)을 그대로 사용합니다.
-        MmWaveMacPduTag pduTag;
-        pduTag.SetSfn (SfnSf (m_frameNum, m_sfNum, m_slotNum)); 
-        p->AddPacketTag (pduTag);
-
-        LteRadioBearerTag radioTag;
-        radioTag.SetRnti (params.rnti);
-        radioTag.SetLcid (params.lcid);
-        p->AddPacketTag (radioTag);
-
-        m_phySapProvider->SendMacPdu (p);
-        
-        NS_LOG_UNCOND ("DEBUG: eNB MAC 발사! [SFN:" << m_frameNum << " SF:" << (uint16_t)m_sfNum << " Slot:" << (uint16_t)m_slotNum << "] Size: " << p->GetSize());
+    if (params.rnti >= 1000) {
+        m_multicastQueue.push(params.pdu->Copy()); // 창고 입고
+        // NS_LOG_UNCOND ("MAC Queue: Stored! Current count: " << m_multicastQueue.size());
         return; 
     }
+    // ---------------- [연구용 멀티캐스트 직통 로직] ----------------
+    // if (params.rnti >= 1000) 
+    // {
+    //     // 1. 순수 데이터 복사
+    //     Ptr<Packet> p = params.pdu->Copy(); 
+    //     uint32_t payloadSize = p->GetSize();
+
+    //     // 2. MAC 헤더 및 서브헤더 생성 (알맹이 포장)
+    //     MmWaveMacPduHeader macHeader;
+    //     // [핵심] 서브헤더에 데이터 크기를 명시해야 UE가 읽을 수 있습니다.
+    //     MacSubheader subHeader (params.lcid, payloadSize);
+    //     macHeader.AddSubheader (subHeader);
+
+    //     // 3. 패킷 맨 앞에 헤더 부착
+    //     p->AddHeader (macHeader); 
+
+    //     // 4. [매우 중요] 시간 태그 설정
+    //     // MAC의 현재 카운터가 아니라, 스케줄러가 전송을 허용한 그 시점의 태그를 찾아야 합니다.
+    //     // 일단 현재 로직에서는 m_frameNum 등을 쓰되, 
+    //     // 만약 계속 2바이트가 뜬다면 태그 설정 없이 쏴보는 테스트가 필요합니다.
+    //     MmWaveMacPduTag pduTag;
+    //     pduTag.SetSfn (SfnSf (m_frameNum, m_sfNum, m_slotNum)); 
+    //     p->AddPacketTag (pduTag);
+
+    //     LteRadioBearerTag radioTag;
+    //     radioTag.SetRnti (params.rnti);
+    //     radioTag.SetLcid (params.lcid);
+    //     p->AddPacketTag (radioTag);
+
+    //     // 5. 발사
+    //     m_phySapProvider->SendMacPdu (p);
+        
+    //     NS_LOG_UNCOND ("DEBUG: eNB MAC 발송 완료! 크기(헤더포함): " << p->GetSize());
+    //     return; 
+    // }
 
     // ---------------- [기존 ns-3 표준 유니캐스트 로직] ----------------
     // // 원래 코드의 Map 기반 전송 로직입니다. (삭제하지 않음)
@@ -956,6 +978,9 @@ MmWaveEnbMac::DoSchedConfigIndication(MmWaveMacSchedSapUser::SchedConfigIndParam
     m_phySapProvider->SetSlotAllocInfo(ind.m_slotAllocInfo);
     LteMacSapUser::TxOpportunityParameters txOpParams;
     uint32_t subHdrSize = 4; 
+    
+    // [중요] 이번 슬롯에서 실제 데이터 전송이 일어났는지 추적하는 플래그
+    bool multicastSentInThisSlot = false;
 
     for (unsigned iTti = 0; iTti < ind.m_slotAllocInfo.m_ttiAllocInfo.size(); iTti++)
     {
@@ -964,58 +989,38 @@ MmWaveEnbMac::DoSchedConfigIndication(MmWaveMacSchedSapUser::SchedConfigIndParam
             ttiAllocInfo.m_tddMode == TtiAllocInfo::DL_slotAllocInfo)
         {
             uint16_t rnti = ttiAllocInfo.m_dci.m_rnti;
-            m_macDlTxSizeRetx(rnti, m_cellId, ttiAllocInfo.m_dci.m_tbSize, ttiAllocInfo.m_dci.m_rv);
-
+            // std::cout << "fuck" << rnti <<std::endl;
             // ---------------- [A] 멀티캐스트 처리 로직 (1000 이상) ----------------
             if (rnti >= 1000)
-            {
-                uint16_t sourceRnti = 1; // UE 0
-                auto rntiIt = m_rlcAttached.find(sourceRnti);
+{
+    uint32_t currentBeamSector = g_activeSectors[g_activeIdx];
+    uint16_t targetRnti = 1001 + currentBeamSector;
 
-                if (rntiIt != m_rlcAttached.end() && ttiAllocInfo.m_dci.m_tbSize > 0)
-                {
-                    uint8_t multicastHarqId = 0; 
-                    uint32_t sourceKey = ((sourceRnti & 0xFFFF) << 8) | (multicastHarqId & 0xFF);
+    if (rnti == targetRnti) 
+{
+    if (!m_multicastQueue.empty()) 
+    {
+        Ptr<Packet> p = m_multicastQueue.front()->Copy(); 
+        
+        // 1. 헤더 입히기
+        MmWaveMacPduHeader macHeader;
+        macHeader.AddSubheader (MacSubheader (3, p->GetSize())); 
+        p->AddHeader (macHeader);
 
-                    // 1. 그릇 생성 (인자 값을 명시적으로 전달)
-                    MacPduInfo sourcePduInfo(ind.m_sfnSf, ttiAllocInfo.m_dci.m_tbSize, rntiIt->second.size(), ttiAllocInfo.m_dci);
+        // 2. [필수!!!] 타이밍 태그가 없으면 UE MAC에 로그가 안 뜹니다.
+        MmWaveMacPduTag timingTag (ind.m_sfnSf); 
+        p->AddPacketTag (timingTag);
+        
+        // 3. RNTI 태그
+        LteRadioBearerTag radioTag;
+        radioTag.SetRnti (rnti); 
+        p->AddPacketTag (radioTag);
 
-                    // [해결] operator[] 대신 insert를 사용하여 기본 생성자 에러 회피
-                    m_macPduMap.insert(std::make_pair(sourceKey, sourcePduInfo));
-
-                    // 2. RLC에 데이터 요청
-                    for (auto const& [lcid, msu] : rntiIt->second) {
-                        LteMacSapUser::TxOpportunityParameters txOp;
-                        txOp.bytes = ttiAllocInfo.m_dci.m_tbSize - 20; 
-                        txOp.rnti = sourceRnti;
-                        txOp.lcid = lcid;
-                        txOp.harqId = multicastHarqId; 
-                        txOp.componentCarrierId = m_componentCarrierId;
-                        msu->NotifyTxOpportunity(txOp);
-                    }
-
-                    // 3. 데이터 가로채기 및 전송
-                    auto itPdu = m_macPduMap.find(sourceKey);
-                    if (itPdu != m_macPduMap.end() && itPdu->second.m_pdu) {
-                        Ptr<Packet> realPkt = itPdu->second.m_pdu;
-
-                        // 태그 교체 (중복 방지)
-                        LteRadioBearerTag bearerTag(rnti, itPdu->second.m_size, 0);
-                        realPkt->RemovePacketTag(bearerTag);
-                        realPkt->AddPacketTag(bearerTag);
-                        
-                        MmWaveMacPduTag pduTag(ind.m_sfnSf);
-                        pduTag.SetNumSym(ttiAllocInfo.m_dci.m_numSym);
-                        realPkt->RemovePacketTag(pduTag);
-                        realPkt->AddPacketTag(pduTag);
-
-                        m_phySapProvider->SendMacPdu(realPkt);
-                        m_macPduMap.erase(itPdu); 
-                        NS_LOG_INFO("성공: 멀티캐스트 전송 완료");
-                    }
-                }
-                continue;
-            }
+        m_phySapProvider->SendMacPdu (p);
+    }
+}
+    continue; 
+}
 
             // ---------------- [B] 일반 유니캐스트 처리 로직 ----------------
             auto rntiIt = m_rlcAttached.find(rnti);
@@ -1024,40 +1029,51 @@ MmWaveEnbMac::DoSchedConfigIndication(MmWaveMacSchedSapUser::SchedConfigIndParam
                 DciInfoElementTdma& dciElem = ttiAllocInfo.m_dci;
                 uint8_t tbUid = dciElem.m_harqProcess;
 
-                if (dciElem.m_ndi == 1) // 신규 데이터
+                if (dciElem.m_ndi == 1) // 신규 데이터인 경우
                 {
                     std::vector<RlcPduInfo>& rlcPduInfo = ttiAllocInfo.m_rlcPduInfo;
                     uint32_t tbMapKey = ((rnti & 0xFFFF) << 8) | (tbUid & 0xFF);
-                    MacPduInfo macPduInfo(ind.m_sfnSf, ttiAllocInfo.m_dci.m_tbSize, rlcPduInfo.size(), dciElem);
-                    auto mapRet = m_macPduMap.insert(std::make_pair(tbMapKey, macPduInfo));
                     
-                    auto harqIt = m_miDlHarqProcessesPackets.find(rnti);
-                    if (harqIt != m_miDlHarqProcessesPackets.end()) {
-                        harqIt->second.at(tbUid).m_pktBurst = CreateObject<PacketBurst>();
-                        harqIt->second.at(tbUid).m_lcidList.clear();
+                    // MAC PDU 맵에 전송 정보 저장 (RLC 응답 대기용)
+                    MacPduInfo macPduInfo(ind.m_sfnSf, ttiAllocInfo.m_dci.m_tbSize, rlcPduInfo.size(), dciElem);
+                    m_macPduMap.insert(std::make_pair(tbMapKey, macPduInfo));
 
-                        for (unsigned int ipdu = 0; ipdu < rlcPduInfo.size(); ipdu++) {
-                            auto lcidIt = rntiIt->second.find(rlcPduInfo[ipdu].m_lcid);
-                            if (lcidIt != rntiIt->second.end()) {
-                                txOpParams.bytes = rlcPduInfo[ipdu].m_size - subHdrSize;
-                                txOpParams.rnti = rnti;
-                                txOpParams.lcid = rlcPduInfo[ipdu].m_lcid;
-                                txOpParams.harqId = tbUid;
-                                (*lcidIt).second->NotifyTxOpportunity(txOpParams);
-                                harqIt->second.at(tbUid).m_lcidList.push_back(rlcPduInfo[ipdu].m_lcid);
-                            }
+                    // RLC 레이어에 데이터 요청
+                    for (unsigned int ipdu = 0; ipdu < rlcPduInfo.size(); ipdu++) {
+                        auto lcidIt = rntiIt->second.find(rlcPduInfo[ipdu].m_lcid);
+                        if (lcidIt != rntiIt->second.end()) {
+                            txOpParams.bytes = rlcPduInfo[ipdu].m_size - subHdrSize;
+                            txOpParams.rnti = rnti;
+                            txOpParams.lcid = rlcPduInfo[ipdu].m_lcid;
+                            txOpParams.harqId = tbUid;
+                            txOpParams.componentCarrierId = m_componentCarrierId;
+                            (*lcidIt).second->NotifyTxOpportunity(txOpParams);
                         }
-                        // PDU 조립 및 전송
-                        auto pduMapIt = mapRet.first;
-                        if (pduMapIt->second.m_numRlcPdu == 0) pduMapIt->second.m_macHeader.AddSubheader(MacSubheader(3, 0));
-                        pduMapIt->second.m_pdu->AddHeader(pduMapIt->second.m_macHeader);
-                        pduMapIt->second.m_pdu->AddPacketTag(LteRadioBearerTag(rnti, pduMapIt->second.m_size, 0));
-                        m_phySapProvider->SendMacPdu(pduMapIt->second.m_pdu);
+                    }
+
+                    // 수집된 데이터를 PHY로 전송
+                    auto pduMapIt = m_macPduMap.find(tbMapKey);
+                    if (pduMapIt != m_macPduMap.end() && pduMapIt->second.m_pdu) {
+                        Ptr<Packet> upkt = pduMapIt->second.m_pdu;
+                        upkt->AddHeader(pduMapIt->second.m_macHeader);
+                        
+                        // [에러 해결] 유니캐스트 패킷에도 반드시 타이밍 태그를 부착해야 크래시가 안 납니다.
+                        upkt->AddPacketTag(MmWaveMacPduTag(ind.m_sfnSf)); 
+                        upkt->AddPacketTag(LteRadioBearerTag(rnti, pduMapIt->second.m_size, 0));
+                        
+                        m_phySapProvider->SendMacPdu(upkt);
                     }
                     m_macPduMap.erase(tbMapKey);
                 }
             }
         }
+    }
+
+    // [중요] 모든 TTI 루프가 끝난 뒤, 이번 슬롯에서 실제 전송이 일어났다면 큐에서 패킷 제거
+    if (multicastSentInThisSlot && !m_multicastQueue.empty()) 
+    {
+        m_multicastQueue.pop(); 
+        NS_LOG_UNCOND ("MAC Queue POP: 배송 완료 후 패킷 제거. 남은 패킷: " << m_multicastQueue.size());
     }
 }
 
